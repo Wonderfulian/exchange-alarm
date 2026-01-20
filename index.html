@@ -3,10 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>실시간 환율 (Real-Time)</title>
-    <link rel="manifest" href="manifest.json">
+    <title>실시간 환율 (Final v3)</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #121212; color: white; text-align: center; padding: 20px; transition: background 0.3s; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #121212; color: white; text-align: center; padding: 20px; }
         
         /* 알림 효과 */
         .alert-bg { animation: flashRed 1s infinite; }
@@ -14,10 +13,9 @@
 
         h1 { color: #4CAF50; margin-bottom: 5px; font-size: 1.2rem; }
         
-        .rate-box { background: #1e1e1e; padding: 25px; border-radius: 20px; margin: 20px auto; max-width: 320px; border: 1px solid #333; box-shadow: 0 10px 20px rgba(0,0,0,0.3); }
+        .rate-box { background: #1e1e1e; padding: 25px; border-radius: 20px; margin: 20px auto; max-width: 320px; border: 1px solid #333; }
         #currentRate { font-size: 3.5rem; font-weight: 800; margin: 10px 0; letter-spacing: -1px; }
         
-        /* 등락 색상 (한국식: 상승=빨강, 하락=파랑) */
         .up { color: #ff5252; }
         .down { color: #448aff; }
         .even { color: #ffffff; }
@@ -26,10 +24,12 @@
         .mode-live { color: #fff; border: 1px solid #ff5252; background: #d32f2f; } 
         .mode-safe { color: #fff; border: 1px solid #4caf50; background: #2e7d32; }
 
+        /* 진행 상황 로그 (디버깅용) */
+        #debugLog { font-size: 0.7rem; color: #666; margin-top: 10px; height: 20px; }
+
         .control-area { max-width: 350px; margin: 0 auto; margin-top: 30px;}
         input { padding: 12px; border-radius: 10px; border: none; font-size: 1.2rem; width: 100px; text-align: center; background: #333; color: white; margin-right: 5px; font-weight: bold; }
-        button { padding: 12px 18px; border-radius: 10px; border: none; font-size: 1rem; cursor: pointer; font-weight: bold; transition: transform 0.1s; }
-        button:active { transform: scale(0.95); }
+        button { padding: 12px 18px; border-radius: 10px; border: none; font-size: 1rem; cursor: pointer; font-weight: bold; }
         .btn-add { background: #2196F3; color: white; }
         .btn-perm { width: 100%; background: #4CAF50; color: white; margin-bottom: 15px; padding: 15px; font-size: 1.1rem; }
 
@@ -43,25 +43,23 @@
     <h1>USD/KRW 실시간</h1>
 
     <div class="rate-box">
-        <div id="currentRate">Loading...</div>
-        <div id="serverStatus" class="status-badge">서버 연결 시도중...</div>
-    </div>
+        <div id="currentRate">---</div>
+        <div id="serverStatus" class="status-badge">연결 대기중...</div>
+        <div id="debugLog">초기화 중...</div> </div>
 
     <div class="control-area">
-        <button class="btn-perm" onclick="requestNoti()">🔔 알림 권한 켜기 (필수)</button>
-
+        <button class="btn-perm" onclick="requestNoti()">🔔 알림 권한 켜기</button>
         <div>
-            <input type="number" id="targetInput" placeholder="1480" inputmode="decimal">
+            <input type="number" id="targetInput" placeholder="1480">
             <button class="btn-add" onclick="addTarget()">목표 추가</button>
         </div>
-
         <ul id="targetList"></ul>
     </div>
 
     <script>
         let targets = JSON.parse(localStorage.getItem('myTargets') || '[]');
 
-        // 1. 좀비 캐시 제거
+        // 1. 좀비 캐시 삭제
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(regs => {
                 regs.forEach(reg => reg.unregister());
@@ -71,73 +69,90 @@
         init();
         function init() {
             renderList();
-            getRateProxy();
-            // 3초마다 갱신 (무료 서버 부하 고려하여 3초 권장)
-            setInterval(getRateProxy, 3000); 
+            fetchDataLoop(); // 시작
+            setInterval(fetchDataLoop, 5000); // 5초마다 실행 (서버 보호)
         }
 
-        // ★ 핵심: 강력한 우회(Proxy) 접속 함수 (AllOrigins) ★
-        async function getRateProxy() {
+        // ★ 3중 안전장치 함수 ★
+        async function fetchDataLoop() {
+            const logEl = document.getElementById('debugLog');
+            
+            // 1차 시도: Corsproxy.io (가장 빠름)
             try {
-                // 원본 주소 (두나무/업비트)
+                logEl.innerText = "1차 서버(Fast) 접속 시도...";
                 const targetUrl = 'https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWUSD';
-                
-                // [수정됨] api.allorigins.win 사용 + timestamp로 캐시 무력화
-                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}&t=${Date.now()}`;
+                const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}&t=${Date.now()}`;
                 
                 const res = await fetch(proxyUrl);
-                if (!res.ok) throw new Error("Proxy Fail");
-
-                // AllOrigins는 데이터를 contents 안에 문자열로 줍니다.
-                const wrapper = await res.json(); 
-                const data = JSON.parse(wrapper.contents); // 문자열 파싱
-
-                const rate = data[0].basePrice;
-                const change = data[0].change; // RISE, FALL, EVEN
+                if (!res.ok) throw new Error("1차 실패");
+                const data = await res.json();
                 
-                // 화면 업데이트
-                const rateEl = document.getElementById('currentRate');
-                const statusEl = document.getElementById('serverStatus');
+                updateScreen(data[0].basePrice, data[0].change, true);
+                logEl.innerText = ""; // 성공시 로그 지움
+                return; // 성공하면 여기서 종료
 
-                rateEl.innerText = rate.toLocaleString();
+            } catch (e1) {
+                console.warn("1차 실패, 2차 시도...", e1);
                 
-                if (change === 'RISE') rateEl.className = 'up';
-                else if (change === 'FALL') rateEl.className = 'down';
-                else rateEl.className = 'even';
+                // 2차 시도: AllOrigins (안정적)
+                try {
+                    logEl.innerText = "2차 서버(Stable) 우회 시도...";
+                    const targetUrl = 'https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWUSD';
+                    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}&t=${Date.now()}`;
+                    
+                    const res = await fetch(proxyUrl);
+                    if (!res.ok) throw new Error("2차 실패");
+                    const wrapper = await res.json();
+                    const data = JSON.parse(wrapper.contents); // 파싱 주의
 
-                statusEl.innerText = "⚡ 실시간 (Upbit)";
-                statusEl.className = "status-badge mode-live";
+                    updateScreen(data[0].basePrice, data[0].change, true);
+                    logEl.innerText = "";
+                    return; // 성공하면 종료
 
-                checkAlert(rate);
-
-            } catch (e) {
-                console.error("우회 접속 실패, 백업 가동", e);
-                fallbackAPI();
+                } catch (e2) {
+                    console.error("2차 실패, 비상망 가동", e2);
+                    // 3차 시도: OpenAPI (무조건 됨, 어제 환율)
+                    logEl.innerText = "실시간 실패.. 비상망 가동";
+                    fallbackAPI();
+                }
             }
         }
 
-        // 백업: Open API (실패 시에만 작동, 하루 1회 갱신값)
         async function fallbackAPI() {
             try {
                 const res = await fetch('https://open.er-api.com/v6/latest/USD');
                 const data = await res.json();
-                const rate = data.rates.KRW;
-                
-                document.getElementById('currentRate').innerText = rate.toFixed(1);
-                document.getElementById('serverStatus').innerText = "⚠️ 지연 시세 (OpenAPI)";
-                document.getElementById('serverStatus').className = "status-badge mode-safe";
-                
-                checkAlert(rate);
+                updateScreen(data.rates.KRW, 'EVEN', false); // false = 실시간 아님
             } catch(e) {
-                document.getElementById('serverStatus').innerText = "인터넷 연결 확인 필요";
+                document.getElementById('currentRate').innerText = "Error";
+                document.getElementById('debugLog').innerText = "인터넷 연결을 확인하세요.";
             }
+        }
+
+        function updateScreen(price, change, isLive) {
+            const rateEl = document.getElementById('currentRate');
+            const statusEl = document.getElementById('serverStatus');
+
+            rateEl.innerText = price.toLocaleString();
+
+            if (change === 'RISE') rateEl.className = 'up';
+            else if (change === 'FALL') rateEl.className = 'down';
+            else rateEl.className = 'even';
+
+            if (isLive) {
+                statusEl.innerText = "⚡ 실시간 (Upbit)";
+                statusEl.className = "status-badge mode-live";
+            } else {
+                statusEl.innerText = "⚠️ 지연 시세 (OpenAPI)";
+                statusEl.className = "status-badge mode-safe";
+            }
+            
+            checkAlert(price);
         }
 
         function checkAlert(current) {
             targets.forEach(t => {
                 if (t.notified) return;
-
-                // 목표가 도달 체크 (0.5원 오차범위)
                 if (Math.abs(current - t.price) <= 0.5) {
                     doNotify(t.price, current);
                     t.notified = true;
@@ -148,18 +163,10 @@
         }
 
         function doNotify(target, current) {
-            // 화면 깜빡임
             document.body.classList.add('alert-bg');
             setTimeout(() => document.body.classList.remove('alert-bg'), 4000);
-
-            // 알림 발송
             if (Notification.permission === "granted") {
-                new Notification(`💰 환율 도달! ${target}원`, {
-                    body: `현재 환율: ${current}원`,
-                    icon: "https://cdn-icons-png.flaticon.com/512/2535/2535079.png",
-                    requireInteraction: true,
-                    vibrate: [200, 100, 200]
-                });
+                new Notification(`💰 환율 도달! ${target}원`, { body: `현재: ${current}원` });
             }
         }
 
@@ -184,23 +191,13 @@
             targets.forEach((t, i) => {
                 const li = document.createElement('li');
                 li.style.opacity = t.notified ? "0.4" : "1";
-                li.innerHTML = `
-                    <span>🎯 ${t.price}원 ${t.notified ? "(완료)" : ""}</span> 
-                    <button class="del-btn" onclick="removeTarget(${i})">삭제</button>
-                `;
+                li.innerHTML = `<span>🎯 ${t.price}원</span><button class="del-btn" onclick="removeTarget(${i})">삭제</button>`;
                 list.appendChild(li);
             });
         }
 
-        function saveData() {
-            localStorage.setItem('myTargets', JSON.stringify(targets));
-        }
-
-        function requestNoti() {
-            Notification.requestPermission().then(perm => {
-                if(perm === 'granted') alert("알림이 켜졌습니다! 앱을 켜두시면 작동합니다.");
-            });
-        }
+        function saveData() { localStorage.setItem('myTargets', JSON.stringify(targets)); }
+        function requestNoti() { Notification.requestPermission(); }
     </script>
 </body>
 </html>

@@ -22,8 +22,9 @@
         .down { color: #448aff; }
         .even { color: #ffffff; }
 
-        .status-badge { font-size: 0.8rem; padding: 4px 10px; border-radius: 12px; background: #333; display: inline-block; margin-top: 5px; color: #888;}
-        .mode-live { color: #ff5252; border: 1px solid #ff5252; background: #3e1b1b; } 
+        .status-badge { font-size: 0.8rem; padding: 4px 10px; border-radius: 12px; background: #333; display: inline-block; margin-top: 5px; color: #aaa;}
+        .mode-live { color: #fff; border: 1px solid #ff5252; background: #d32f2f; } 
+        .mode-safe { color: #fff; border: 1px solid #4caf50; background: #2e7d32; }
 
         .control-area { max-width: 350px; margin: 0 auto; margin-top: 30px;}
         input { padding: 12px; border-radius: 10px; border: none; font-size: 1.2rem; width: 100px; text-align: center; background: #333; color: white; margin-right: 5px; font-weight: bold; }
@@ -47,7 +48,7 @@
     </div>
 
     <div class="control-area">
-        <button class="btn-perm" onclick="requestNoti()">🔔 알림 권한 켜기</button>
+        <button class="btn-perm" onclick="requestNoti()">🔔 알림 권한 켜기 (필수)</button>
 
         <div>
             <input type="number" id="targetInput" placeholder="1480" inputmode="decimal">
@@ -61,7 +62,7 @@
         let targets = JSON.parse(localStorage.getItem('myTargets') || '[]');
         let lastRate = 0;
 
-        // 서비스워커 캐시 삭제 (좀비 방지)
+        // 1. 좀비 캐시 제거 (새 코드 적용을 위해 필수)
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(regs => {
                 regs.forEach(reg => reg.unregister());
@@ -72,22 +73,22 @@
         function init() {
             renderList();
             getRateProxy();
-            // 3초마다 갱신 (실시간성 유지)
+            // 3초마다 갱신
             setInterval(getRateProxy, 3000); 
         }
 
         // ★ 핵심: 우회(Proxy) 접속 함수
         async function getRateProxy() {
             try {
-                // 1. Upbit 주소
+                // 원본 주소 (두나무)
                 const targetUrl = 'https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWUSD';
                 
-                // 2. 우회 서버(corsproxy.io)를 앞에 붙임
-                // 't=' + Date.now()는 캐싱 방지용
+                // ★ 우회 서버(corsproxy.io)를 통해 접속하여 'Failed to fetch' 해결 ★
+                // t값을 붙여 캐싱 방지
                 const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}&t=${Date.now()}`;
                 
                 const res = await fetch(proxyUrl);
-                if (!res.ok) throw new Error("Proxy Error");
+                if (!res.ok) throw new Error("Proxy Fail");
 
                 const data = await res.json();
                 const rate = data[0].basePrice;
@@ -99,23 +100,23 @@
 
                 rateEl.innerText = rate.toLocaleString();
                 
-                // 색상 변경
-                if (change === 'RISE') { rateEl.className = 'up'; }
-                else if (change === 'FALL') { rateEl.className = 'down'; }
-                else { rateEl.className = 'even'; }
+                if (change === 'RISE') rateEl.className = 'up';
+                else if (change === 'FALL') rateEl.className = 'down';
+                else rateEl.className = 'even';
 
-                statusEl.innerText = "⚡ 실시간 연결됨";
+                statusEl.innerText = "⚡ 실시간 (Upbit)";
                 statusEl.className = "status-badge mode-live";
 
                 checkAlert(rate);
 
             } catch (e) {
-                console.error(e);
+                console.error("우회 접속 실패, 백업 가동", e);
                 // 우회 실패시 백업(OpenAPI) 사용
                 fallbackAPI();
             }
         }
 
+        // 백업: Open API (매일 1회 갱신되는 안정적인 값)
         async function fallbackAPI() {
             try {
                 const res = await fetch('https://open.er-api.com/v6/latest/USD');
@@ -123,12 +124,12 @@
                 const rate = data.rates.KRW;
                 
                 document.getElementById('currentRate').innerText = rate.toFixed(1);
-                document.getElementById('serverStatus').innerText = "OpenAPI (대체작동)";
-                document.getElementById('currentRate').className = 'even';
+                document.getElementById('serverStatus').innerText = "🟢 안정모드 (OpenAPI)";
+                document.getElementById('serverStatus').className = "status-badge mode-safe";
                 
                 checkAlert(rate);
             } catch(e) {
-                document.getElementById('serverStatus').innerText = "연결 실패 (재시도중)";
+                document.getElementById('serverStatus').innerText = "인터넷 연결 확인 필요";
             }
         }
 
@@ -147,13 +148,13 @@
         }
 
         function doNotify(target, current) {
-            // 1. 화면 깜빡임
+            // 화면 깜빡임
             document.body.classList.add('alert-bg');
             setTimeout(() => document.body.classList.remove('alert-bg'), 4000);
 
-            // 2. 푸시 알림
+            // 알림 발송
             if (Notification.permission === "granted") {
-                new Notification(`💰 목표가 ${target}원 도달!`, {
+                new Notification(`💰 환율 도달! ${target}원`, {
                     body: `현재 환율: ${current}원`,
                     icon: "https://cdn-icons-png.flaticon.com/512/2535/2535079.png",
                     requireInteraction: true,
@@ -197,11 +198,7 @@
 
         function requestNoti() {
             Notification.requestPermission().then(perm => {
-                if(perm === 'granted') {
-                    alert("알림이 켜졌습니다!");
-                    // 테스트 알림 발송
-                    new Notification("알림 테스트 성공");
-                }
+                if(perm === 'granted') alert("알림이 켜졌습니다! 앱을 켜두시면 작동합니다.");
             });
         }
     </script>

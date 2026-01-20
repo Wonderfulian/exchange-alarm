@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>실시간 환율 (Final)</title>
+    <title>실시간 환율 (Real-Time)</title>
     <link rel="manifest" href="manifest.json">
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #121212; color: white; text-align: center; padding: 20px; transition: background 0.3s; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #121212; color: white; text-align: center; padding: 20px; transition: background 0.3s; }
         
         /* 알림 효과 */
         .alert-bg { animation: flashRed 1s infinite; }
@@ -17,7 +17,7 @@
         .rate-box { background: #1e1e1e; padding: 25px; border-radius: 20px; margin: 20px auto; max-width: 320px; border: 1px solid #333; box-shadow: 0 10px 20px rgba(0,0,0,0.3); }
         #currentRate { font-size: 3.5rem; font-weight: 800; margin: 10px 0; letter-spacing: -1px; }
         
-        /* 등락 색상 */
+        /* 등락 색상 (한국식: 상승=빨강, 하락=파랑) */
         .up { color: #ff5252; }
         .down { color: #448aff; }
         .even { color: #ffffff; }
@@ -60,9 +60,8 @@
 
     <script>
         let targets = JSON.parse(localStorage.getItem('myTargets') || '[]');
-        let lastRate = 0;
 
-        // 1. 좀비 캐시 제거 (새 코드 적용을 위해 필수)
+        // 1. 좀비 캐시 제거
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(regs => {
                 regs.forEach(reg => reg.unregister());
@@ -73,24 +72,26 @@
         function init() {
             renderList();
             getRateProxy();
-            // 3초마다 갱신
+            // 3초마다 갱신 (무료 서버 부하 고려하여 3초 권장)
             setInterval(getRateProxy, 3000); 
         }
 
-        // ★ 핵심: 우회(Proxy) 접속 함수
+        // ★ 핵심: 강력한 우회(Proxy) 접속 함수 (AllOrigins) ★
         async function getRateProxy() {
             try {
-                // 원본 주소 (두나무)
+                // 원본 주소 (두나무/업비트)
                 const targetUrl = 'https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWUSD';
                 
-                // ★ 우회 서버(corsproxy.io)를 통해 접속하여 'Failed to fetch' 해결 ★
-                // t값을 붙여 캐싱 방지
-                const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}&t=${Date.now()}`;
+                // [수정됨] api.allorigins.win 사용 + timestamp로 캐시 무력화
+                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}&t=${Date.now()}`;
                 
                 const res = await fetch(proxyUrl);
                 if (!res.ok) throw new Error("Proxy Fail");
 
-                const data = await res.json();
+                // AllOrigins는 데이터를 contents 안에 문자열로 줍니다.
+                const wrapper = await res.json(); 
+                const data = JSON.parse(wrapper.contents); // 문자열 파싱
+
                 const rate = data[0].basePrice;
                 const change = data[0].change; // RISE, FALL, EVEN
                 
@@ -111,12 +112,11 @@
 
             } catch (e) {
                 console.error("우회 접속 실패, 백업 가동", e);
-                // 우회 실패시 백업(OpenAPI) 사용
                 fallbackAPI();
             }
         }
 
-        // 백업: Open API (매일 1회 갱신되는 안정적인 값)
+        // 백업: Open API (실패 시에만 작동, 하루 1회 갱신값)
         async function fallbackAPI() {
             try {
                 const res = await fetch('https://open.er-api.com/v6/latest/USD');
@@ -124,7 +124,7 @@
                 const rate = data.rates.KRW;
                 
                 document.getElementById('currentRate').innerText = rate.toFixed(1);
-                document.getElementById('serverStatus').innerText = "🟢 안정모드 (OpenAPI)";
+                document.getElementById('serverStatus').innerText = "⚠️ 지연 시세 (OpenAPI)";
                 document.getElementById('serverStatus').className = "status-badge mode-safe";
                 
                 checkAlert(rate);

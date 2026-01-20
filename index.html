@@ -24,8 +24,8 @@
         .mode-live { color: #fff; border: 1px solid #ff5252; background: #d32f2f; } 
         .mode-safe { color: #fff; border: 1px solid #4caf50; background: #2e7d32; }
 
-        /* 진행 상황 로그 (디버깅용) */
-        #debugLog { font-size: 0.7rem; color: #666; margin-top: 10px; height: 20px; }
+        /* 디버그 로그는 이제 필요 없어서 숨김 처리 */
+        #debugLog { font-size: 0.7rem; color: #666; margin-top: 10px; height: 20px; opacity: 0; }
 
         .control-area { max-width: 350px; margin: 0 auto; margin-top: 30px;}
         input { padding: 12px; border-radius: 10px; border: none; font-size: 1.2rem; width: 100px; text-align: center; background: #333; color: white; margin-right: 5px; font-weight: bold; }
@@ -44,8 +44,9 @@
 
     <div class="rate-box">
         <div id="currentRate">---</div>
-        <div id="serverStatus" class="status-badge">연결 대기중...</div>
-        <div id="debugLog">초기화 중...</div> </div>
+        <div id="serverStatus" class="status-badge">서버 연결 중...</div>
+        <div id="debugLog">.</div> 
+    </div>
 
     <div class="control-area">
         <button class="btn-perm" onclick="requestNoti()">🔔 알림 권한 켜기</button>
@@ -59,68 +60,25 @@
     <script>
         let targets = JSON.parse(localStorage.getItem('myTargets') || '[]');
 
-        // 1. 좀비 캐시 삭제
+        // 1. 좀비 캐시 삭제 (구버전 충돌 방지)
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(regs => {
                 regs.forEach(reg => reg.unregister());
             });
         }
 
+        // 초기화
         init();
         function init() {
             renderList();
-            fetchDataLoop(); // 시작
-            setInterval(fetchDataLoop, 5000); // 5초마다 실행 (서버 보호)
+            getRateProxy(); // 바로 실행
+            setInterval(getRateProxy, 5000); // 5초마다 반복
         }
 
-        // ★ 3중 안전장치 함수 ★
-        async function fetchDataLoop() {
-            const logEl = document.getElementById('debugLog');
-            
-            // 1차 시도: Corsproxy.io (가장 빠름)
-            try {
-                logEl.innerText = "1차 서버(Fast) 접속 시도...";
-                const targetUrl = 'https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWUSD';
-                const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}&t=${Date.now()}`;
-                
-                const res = await fetch(proxyUrl);
-                if (!res.ok) throw new Error("1차 실패");
-                const data = await res.json();
-                
-                updateScreen(data[0].basePrice, data[0].change, true);
-                logEl.innerText = ""; // 성공시 로그 지움
-                return; // 성공하면 여기서 종료
-
-            } catch (e1) {
-                console.warn("1차 실패, 2차 시도...", e1);
-                
-                // 2차 시도: AllOrigins (안정적)
-                try {
-                    logEl.innerText = "2차 서버(Stable) 우회 시도...";
-                    const targetUrl = 'https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWUSD';
-                    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}&t=${Date.now()}`;
-                    
-                    const res = await fetch(proxyUrl);
-                    if (!res.ok) throw new Error("2차 실패");
-                    const wrapper = await res.json();
-                    const data = JSON.parse(wrapper.contents); // 파싱 주의
-
-                    updateScreen(data[0].basePrice, data[0].change, true);
-                    logEl.innerText = "";
-                    return; // 성공하면 종료
-
-                } catch (e2) {
-                    console.error("2차 실패, 비상망 가동", e2);
-                    // 3차 시도: OpenAPI (무조건 됨, 어제 환율)
-                    logEl.innerText = "실시간 실패.. 비상망 가동";
-                    fallbackAPI();
-                }
-            }
-        }
-
+        // ★★★ 핵심: 미국 구글 서버(Cloud Run) 전용 함수 ★★★
         async function getRateProxy() {
             try {
-                // ▼▼▼ 아까 만든 미국 서버 주소를 따옴표 안에 넣으세요 ▼▼▼
+                // 투자자님의 성공한 미국 서버 주소
                 const myCloudUrl = 'https://my-rate-server-916720061652.us-central1.run.app'; 
                 
                 const res = await fetch(myCloudUrl);
@@ -128,7 +86,8 @@
 
                 const data = await res.json();
                 
-                // 야후 데이터(가짜 업비트) 처리
+                // 데이터 꺼내기 (야후 파이낸스 가공 데이터)
+                // 구조: [{basePrice: 1477.xx, change: 'RISE', provider: 'Yahoo Finance'}]
                 const rate = data[0].basePrice;
                 const change = data[0].change;
                 const provider = data[0].provider;
@@ -137,49 +96,37 @@
                 const rateEl = document.getElementById('currentRate');
                 const statusEl = document.getElementById('serverStatus');
 
+                // 소수점 2자리까지 표시 (1,477.50)
                 rateEl.innerText = rate.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
                 
+                // 색상 변경
                 if (change === 'RISE') rateEl.className = 'up';
                 else if (change === 'FALL') rateEl.className = 'down';
                 else rateEl.className = 'even';
 
+                // 상태 표시
                 statusEl.innerText = `⚡ 실시간 (${provider})`;
                 statusEl.className = "status-badge mode-live";
 
+                // 목표가 알림 체크
                 checkAlert(rate);
 
             } catch (e) {
                 console.error("접속 실패:", e);
-                document.getElementById('serverStatus').innerText = "서버 점검 중";
-                fallbackAPI(); // 실패하면 비상용 API 가동
+                // 실패 시 화면 표시
+                document.getElementById('serverStatus').innerText = "재접속 중...";
+                document.getElementById('serverStatus').className = "status-badge";
             }
         }
 
-        function updateScreen(price, change, isLive) {
-            const rateEl = document.getElementById('currentRate');
-            const statusEl = document.getElementById('serverStatus');
-
-            rateEl.innerText = price.toLocaleString();
-
-            if (change === 'RISE') rateEl.className = 'up';
-            else if (change === 'FALL') rateEl.className = 'down';
-            else rateEl.className = 'even';
-
-            if (isLive) {
-                statusEl.innerText = "⚡ 실시간 (Upbit)";
-                statusEl.className = "status-badge mode-live";
-            } else {
-                statusEl.innerText = "⚠️ 지연 시세 (OpenAPI)";
-                statusEl.className = "status-badge mode-safe";
-            }
-            
-            checkAlert(price);
-        }
+        // --- 아래는 알림 및 저장 기능 (기존과 동일) ---
 
         function checkAlert(current) {
             targets.forEach(t => {
                 if (t.notified) return;
-                if (Math.abs(current - t.price) <= 0.5) {
+                // 목표가에 도달했는지 확인 (오차범위 0.5원)
+                if (Math.abs(current - t.price) <= 0.5 || (t.price < current && current > t.price) ) {
+                     // 단순 도달 뿐만 아니라 돌파했을 때도 알림
                     doNotify(t.price, current);
                     t.notified = true;
                     saveData();
@@ -191,8 +138,10 @@
         function doNotify(target, current) {
             document.body.classList.add('alert-bg');
             setTimeout(() => document.body.classList.remove('alert-bg'), 4000);
+            
+            // 브라우저 알림
             if (Notification.permission === "granted") {
-                new Notification(`💰 환율 도달! ${target}원`, { body: `현재: ${current}원` });
+                new Notification(`💰 목표 달성! ${target}원`, { body: `현재 환율: ${current}원` });
             }
         }
 

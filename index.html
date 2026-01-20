@@ -3,17 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>실시간 환율 (Final v3)</title>
+    <title>실시간 환율 (Final v5)</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #121212; color: white; text-align: center; padding: 20px; }
         
-        /* 알림 효과 */
         .alert-bg { animation: flashRed 1s infinite; }
         @keyframes flashRed { 0% {background:#121212;} 50% {background:#d32f2f;} 100% {background:#121212;} }
 
         h1 { color: #4CAF50; margin-bottom: 5px; font-size: 1.2rem; }
         
-        .rate-box { background: #1e1e1e; padding: 25px; border-radius: 20px; margin: 20px auto; max-width: 320px; border: 1px solid #333; }
+        /* 카드 디자인 */
+        .rate-box { 
+            background: linear-gradient(145deg, #1e1e1e, #2a2a2a);
+            padding: 30px; 
+            border-radius: 25px; 
+            margin: 20px auto; 
+            max-width: 320px; 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        }
         #currentRate { font-size: 3.5rem; font-weight: 800; margin: 10px 0; letter-spacing: -1px; }
         
         .up { color: #ff5252; }
@@ -22,20 +29,23 @@
 
         .status-badge { font-size: 0.8rem; padding: 4px 10px; border-radius: 12px; background: #333; display: inline-block; margin-top: 5px; color: #aaa;}
         .mode-live { color: #fff; border: 1px solid #ff5252; background: #d32f2f; } 
-        .mode-safe { color: #fff; border: 1px solid #4caf50; background: #2e7d32; }
-
-        /* 디버그 로그는 이제 필요 없어서 숨김 처리 */
-        #debugLog { font-size: 0.7rem; color: #666; margin-top: 10px; height: 20px; opacity: 0; }
 
         .control-area { max-width: 350px; margin: 0 auto; margin-top: 30px;}
         input { padding: 12px; border-radius: 10px; border: none; font-size: 1.2rem; width: 100px; text-align: center; background: #333; color: white; margin-right: 5px; font-weight: bold; }
         button { padding: 12px 18px; border-radius: 10px; border: none; font-size: 1rem; cursor: pointer; font-weight: bold; }
         .btn-add { background: #2196F3; color: white; }
-        .btn-perm { width: 100%; background: #4CAF50; color: white; margin-bottom: 15px; padding: 15px; font-size: 1.1rem; }
+        
+        .btn-group { display: flex; gap: 10px; margin-bottom: 15px; }
+        .btn-perm { flex: 1; background: #4CAF50; color: white; font-size: 0.9rem; padding: 10px; }
+        .btn-wake { flex: 1; background: #FF9800; color: white; font-size: 0.9rem; padding: 10px; }
+        .wake-on { background: #E65100; border: 2px solid #FFF; }
 
         ul { list-style: none; padding: 0; margin-top: 20px; }
         li { background: #222; padding: 15px; margin-bottom: 10px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #333; }
         .del-btn { background: #ff5252; color: white; padding: 8px 12px; font-size: 0.8rem; border-radius: 8px; }
+        .dir-badge { font-size: 0.8rem; padding: 3px 6px; border-radius: 4px; margin-right: 8px; font-weight: bold; }
+        .dir-up { background: #ff52521a; color: #ff5252; border: 1px solid #ff5252; }
+        .dir-down { background: #448aff1a; color: #448aff; border: 1px solid #448aff; }
     </style>
 </head>
 <body>
@@ -45,110 +55,128 @@
     <div class="rate-box">
         <div id="currentRate">---</div>
         <div id="serverStatus" class="status-badge">서버 연결 중...</div>
-        <div id="debugLog">.</div> 
     </div>
 
     <div class="control-area">
-        <button class="btn-perm" onclick="requestNoti()">🔔 알림 권한 켜기</button>
+        <div class="btn-group">
+            <button class="btn-perm" onclick="requestNoti()">🔔 알림 권한</button>
+            <button class="btn-wake" id="wakeBtn" onclick="toggleWakeLock()">📱 화면 켜둠</button>
+        </div>
+        
         <div>
-            <input type="number" id="targetInput" placeholder="1480">
-            <button class="btn-add" onclick="addTarget()">목표 추가</button>
+            <input type="number" id="targetInput" placeholder="목표가">
+            <button class="btn-add" onclick="addTarget()">추가</button>
         </div>
         <ul id="targetList"></ul>
     </div>
 
     <script>
-        let targets = JSON.parse(localStorage.getItem('myTargets') || '[]');
+        // v5용 저장소 키 (기존 데이터와 섞이지 않게 분리)
+        let targets = JSON.parse(localStorage.getItem('myTargets_v5') || '[]');
+        let currentRateValue = 0; 
+        let wakeLock = null; 
 
-        // 1. 좀비 캐시 삭제 (구버전 충돌 방지)
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.getRegistrations().then(regs => {
-                regs.forEach(reg => reg.unregister());
-            });
-        }
-
-        // 초기화
         init();
         function init() {
             renderList();
-            getRateProxy(); // 바로 실행
-            setInterval(getRateProxy, 5000); // 5초마다 반복
+            getRateProxy(); 
+            // 20초마다 갱신 (서버 비용 절약 + 안정성)
+            setInterval(getRateProxy, 20000); 
         }
 
-        // ★★★ 핵심: 미국 구글 서버(Cloud Run) 전용 함수 ★★★
         async function getRateProxy() {
             try {
-                // 투자자님의 성공한 미국 서버 주소
+                // 투자자님 서버 주소 (그대로 유지)
                 const myCloudUrl = 'https://my-rate-server-916720061652.us-central1.run.app'; 
                 
                 const res = await fetch(myCloudUrl);
-                if (!res.ok) throw new Error("서버 응답 오류");
-
+                if (!res.ok) throw new Error("Error");
                 const data = await res.json();
                 
-                // 데이터 꺼내기 (야후 파이낸스 가공 데이터)
-                // 구조: [{basePrice: 1477.xx, change: 'RISE', provider: 'Yahoo Finance'}]
                 const rate = data[0].basePrice;
                 const change = data[0].change;
                 const provider = data[0].provider;
 
-                // 화면 업데이트
+                currentRateValue = rate; // 현재가 저장
+
                 const rateEl = document.getElementById('currentRate');
                 const statusEl = document.getElementById('serverStatus');
 
-                // 소수점 2자리까지 표시 (1,477.50)
                 rateEl.innerText = rate.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
                 
-                // 색상 변경
                 if (change === 'RISE') rateEl.className = 'up';
                 else if (change === 'FALL') rateEl.className = 'down';
                 else rateEl.className = 'even';
 
-                // 상태 표시
                 statusEl.innerText = `⚡ 실시간 (${provider})`;
                 statusEl.className = "status-badge mode-live";
 
-                // 목표가 알림 체크
                 checkAlert(rate);
 
             } catch (e) {
-                console.error("접속 실패:", e);
-                // 실패 시 화면 표시
+                console.error(e);
                 document.getElementById('serverStatus').innerText = "재접속 중...";
-                document.getElementById('serverStatus').className = "status-badge";
             }
         }
 
-        // --- 아래는 알림 및 저장 기능 (기존과 동일) ---
-
+        // ★★★ v5 핵심 수정: 칼같은 정확도 로직 ★★★
         function checkAlert(current) {
             targets.forEach(t => {
-                if (t.notified) return;
-                // 목표가에 도달했는지 확인 (오차범위 0.5원)
-                if (Math.abs(current - t.price) <= 0.5 || (t.price < current && current > t.price) ) {
-                     // 단순 도달 뿐만 아니라 돌파했을 때도 알림
-                    doNotify(t.price, current);
-                    t.notified = true;
+                if (t.notified) return; // 이미 울린 건 패스
+
+                let triggered = false;
+
+                // 1. [상승 목표] 설정 시:
+                // 오차범위 삭제! 정확히 목표가보다 크거나 같아야 울림 (>=)
+                // 예: 목표 1481, 현재 1480.99 -> 안 울림
+                if (t.direction === 'UP' && current >= t.price) {
+                    triggered = true;
+                }
+                
+                // 2. [하락 목표] 설정 시:
+                // 정확히 목표가보다 작거나 같아야 울림 (<=)
+                // 예: 목표 1475, 현재 1475.1 -> 안 울림
+                else if (t.direction === 'DOWN' && current <= t.price) {
+                    triggered = true;
+                }
+
+                if (triggered) {
+                    doNotify(t.price, current, t.direction);
+                    t.notified = true; // 알림 완료 처리 (중복 방지)
                     saveData();
                     renderList();
                 }
             });
         }
 
-        function doNotify(target, current) {
+        function doNotify(target, current, dir) {
+            // 화면 빨간색 깜빡임 효과
             document.body.classList.add('alert-bg');
             setTimeout(() => document.body.classList.remove('alert-bg'), 4000);
             
-            // 브라우저 알림
+            const msg = dir === 'UP' ? "📈 돌파!" : "📉 도달!";
+            
+            // 브라우저 푸시 알림
             if (Notification.permission === "granted") {
-                new Notification(`💰 목표 달성! ${target}원`, { body: `현재 환율: ${current}원` });
+                new Notification(`💰 ${target}원 ${msg}`, { body: `현재 환율: ${current}원` });
             }
         }
 
+        // ★ 목표 추가 시 방향 자동 결정 ★
         function addTarget() {
             const val = parseFloat(document.getElementById('targetInput').value);
             if (!val) return;
-            targets.push({ price: val, notified: false });
+            
+            if (currentRateValue === 0) {
+                alert("환율 로딩 후 추가해주세요.");
+                return;
+            }
+
+            // 현재가보다 높으면 UP, 낮으면 DOWN 자동 설정
+            // (1481원 목표인데 현재 1480원이면 -> UP 모드로 저장됨 -> 1480원일 때 안 울림!)
+            const dir = val > currentRateValue ? 'UP' : 'DOWN';
+
+            targets.push({ price: val, direction: dir, notified: false });
             saveData();
             renderList();
             document.getElementById('targetInput').value = '';
@@ -166,12 +194,39 @@
             targets.forEach((t, i) => {
                 const li = document.createElement('li');
                 li.style.opacity = t.notified ? "0.4" : "1";
-                li.innerHTML = `<span>🎯 ${t.price}원</span><button class="del-btn" onclick="removeTarget(${i})">삭제</button>`;
+                
+                const dirIcon = t.direction === 'UP' ? 
+                    "<span class='dir-badge dir-up'>▲상승</span>" : 
+                    "<span class='dir-badge dir-down'>▼하락</span>";
+                
+                li.innerHTML = `<span>${dirIcon} ${t.price}원</span><button class="del-btn" onclick="removeTarget(${i})">삭제</button>`;
                 list.appendChild(li);
             });
         }
 
-        function saveData() { localStorage.setItem('myTargets', JSON.stringify(targets)); }
+        // 화면 켜짐 유지 (Wake Lock)
+        async function toggleWakeLock() {
+            if ('wakeLock' in navigator) {
+                try {
+                    if (wakeLock) {
+                        wakeLock.release();
+                        wakeLock = null;
+                        document.getElementById('wakeBtn').classList.remove('wake-on');
+                        document.getElementById('wakeBtn').innerText = "📱 화면 켜둠";
+                    } else {
+                        wakeLock = await navigator.wakeLock.request('screen');
+                        document.getElementById('wakeBtn').classList.add('wake-on');
+                        document.getElementById('wakeBtn').innerText = "💡 켜짐 유지중";
+                    }
+                } catch (err) {
+                    console.error(err);
+                }
+            } else {
+                alert("지원하지 않는 브라우저입니다.");
+            }
+        }
+
+        function saveData() { localStorage.setItem('myTargets_v5', JSON.stringify(targets)); }
         function requestNoti() { Notification.requestPermission(); }
     </script>
 </body>

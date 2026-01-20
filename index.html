@@ -118,14 +118,40 @@
             }
         }
 
-        async function fallbackAPI() {
+        async function getRateProxy() {
             try {
-                const res = await fetch('https://open.er-api.com/v6/latest/USD');
+                // ▼▼▼ 아까 만든 미국 서버 주소를 따옴표 안에 넣으세요 ▼▼▼
+                const myCloudUrl = 'https://my-rate-server-916720061652.us-central1.run.app'; 
+                
+                const res = await fetch(myCloudUrl);
+                if (!res.ok) throw new Error("서버 응답 오류");
+
                 const data = await res.json();
-                updateScreen(data.rates.KRW, 'EVEN', false); // false = 실시간 아님
-            } catch(e) {
-                document.getElementById('currentRate').innerText = "Error";
-                document.getElementById('debugLog').innerText = "인터넷 연결을 확인하세요.";
+                
+                // 야후 데이터(가짜 업비트) 처리
+                const rate = data[0].basePrice;
+                const change = data[0].change;
+                const provider = data[0].provider;
+
+                // 화면 업데이트
+                const rateEl = document.getElementById('currentRate');
+                const statusEl = document.getElementById('serverStatus');
+
+                rateEl.innerText = rate.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                
+                if (change === 'RISE') rateEl.className = 'up';
+                else if (change === 'FALL') rateEl.className = 'down';
+                else rateEl.className = 'even';
+
+                statusEl.innerText = `⚡ 실시간 (${provider})`;
+                statusEl.className = "status-badge mode-live";
+
+                checkAlert(rate);
+
+            } catch (e) {
+                console.error("접속 실패:", e);
+                document.getElementById('serverStatus').innerText = "서버 점검 중";
+                fallbackAPI(); // 실패하면 비상용 API 가동
             }
         }
 

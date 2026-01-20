@@ -3,29 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>실시간 환율 알리미 (Pro)</title>
+    <title>환율 알리미 (Hybrid)</title>
     <link rel="manifest" href="manifest.json">
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #121212; color: white; text-align: center; padding: 20px; transition: background 0.3s; }
         
-        /* 알림 효과 */
+        /* 알림 깜빡임 효과 */
         .alert-bg { animation: flashRed 1s infinite; }
         @keyframes flashRed { 0% {background:#121212;} 50% {background:#d32f2f;} 100% {background:#121212;} }
 
         h1 { color: #4CAF50; margin-bottom: 5px; font-size: 1.2rem; }
         
-        /* 환율 박스 */
-        .rate-box { background: #1e1e1e; padding: 20px; border-radius: 15px; margin: 20px auto; max-width: 320px; border: 1px solid #333; }
+        /* 메인 박스 */
+        .rate-box { background: #1e1e1e; padding: 20px; border-radius: 15px; margin: 20px auto; max-width: 320px; border: 1px solid #333; position: relative; }
         #currentRate { font-size: 3.5rem; font-weight: bold; margin: 10px 0; letter-spacing: -1px; }
-        /* 상승/하락 색상 */
+        
+        /* 상승하락 색상 */
         .up { color: #ff5252; }
         .down { color: #448aff; }
-        
-        .sub-text { color: #888; font-size: 0.9rem; }
-        #errorMsg { display: none; color: #ff5252; background: #3e1b1b; padding: 10px; border-radius: 8px; font-size: 0.85rem; margin-top: 10px; }
 
-        /* 컨트롤 영역 */
-        .control-area { max-width: 350px; margin: 0 auto; }
+        /* 상태 뱃지 */
+        .status-badge { font-size: 0.8rem; padding: 3px 8px; border-radius: 10px; background: #333; display: inline-block; margin-top: 5px;}
+        .mode-live { color: #ff5252; border: 1px solid #ff5252; } /* 실시간 */
+        .mode-safe { color: #4caf50; border: 1px solid #4caf50; } /* 안정 */
+
+        .control-area { max-width: 350px; margin: 0 auto; margin-top: 20px;}
         input { padding: 12px; border-radius: 8px; border: none; font-size: 1.2rem; width: 100px; text-align: center; background: #333; color: white; margin-right: 5px; }
         button { padding: 12px 18px; border-radius: 8px; border: none; font-size: 1rem; cursor: pointer; font-weight: bold; }
         .btn-add { background: #2196F3; color: white; }
@@ -38,12 +40,11 @@
 </head>
 <body>
 
-    <h1>USD/KRW 실시간(Tick)</h1>
+    <h1>USD/KRW 환율</h1>
 
     <div class="rate-box">
         <div id="currentRate">Loading...</div>
-        <div class="sub-text" id="timeInfo">접속 중...</div>
-        <div id="errorMsg">데이터 로딩 실패</div>
+        <div id="serverStatus" class="status-badge">연결 중...</div>
     </div>
 
     <div class="control-area">
@@ -58,115 +59,4 @@
     </div>
 
     <script>
-        let targets = JSON.parse(localStorage.getItem('myTargets') || '[]');
-        let lastPrice = 0;
-
-        init();
-        function init() {
-            renderList();
-            getRate();
-            // 3초마다 고속 갱신 (주식창 처럼)
-            setInterval(getRate, 3000); 
-        }
-
-        // ★ 핵심 변경: 두나무(Upbit) 실시간 외환 API 사용
-        async function getRate() {
-            try {
-                // 캐시 방지를 위해 시간값(?t=...)을 뒤에 붙임
-                const res = await fetch(`https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWUSD&t=${Date.now()}`);
-                const data = await res.json();
-                
-                // 두나무 데이터 형식: [{basePrice: 1473.0, ...}]
-                const rate = data[0].basePrice; 
-                const change = data[0].change; // RISE(상승), FALL(하락), EVEN(보합)
-                const timeStr = data[0].time; // "18:24:00" 형식
-
-                // 화면 업데이트
-                const rateEl = document.getElementById('currentRate');
-                rateEl.innerText = rate.toLocaleString();
-                
-                // 가격 변동 색상 (빨강/파랑)
-                rateEl.className = change === 'RISE' ? 'up' : (change === 'FALL' ? 'down' : '');
-
-                document.getElementById('timeInfo').innerText = `갱신: ${timeStr.substring(0,5)}`;
-                document.getElementById('errorMsg').style.display = 'none';
-
-                checkAlert(rate);
-                lastPrice = rate;
-
-            } catch (error) {
-                console.error(error);
-                // 에러나면 기존 값 유지하되 메시지만 띄움
-                // document.getElementById('errorMsg').style.display = 'block';
-            }
-        }
-
-        function checkAlert(current) {
-            targets.forEach(t => {
-                if (t.notified) return;
-                
-                // 오차범위 0.5원 이내 접촉 시
-                if (Math.abs(current - t.price) <= 0.5) {
-                    doNotify(t.price, current);
-                    t.notified = true;
-                    saveData();
-                    renderList();
-                }
-            });
-        }
-
-        function doNotify(targetPrice, currentPrice) {
-            document.body.classList.add('alert-bg');
-            setTimeout(() => document.body.classList.remove('alert-bg'), 3000);
-
-            if (Notification.permission === "granted") {
-                new Notification(`⚡ 환율 도달: ${targetPrice}원`, {
-                    body: `현재 ${currentPrice}원 터치!`,
-                    icon: "https://cdn-icons-png.flaticon.com/512/2535/2535079.png",
-                    requireInteraction: true 
-                });
-            }
-        }
-
-        function addTarget() {
-            const val = parseFloat(document.getElementById('targetInput').value);
-            if (!val) return;
-            targets.push({ price: val, notified: false });
-            saveData();
-            renderList();
-            document.getElementById('targetInput').value = '';
-        }
-
-        function removeTarget(idx) {
-            targets.splice(idx, 1);
-            saveData();
-            renderList();
-        }
-
-        function renderList() {
-            const list = document.getElementById('targetList');
-            list.innerHTML = '';
-            targets.forEach((t, i) => {
-                const li = document.createElement('li');
-                li.style.opacity = t.notified ? "0.5" : "1";
-                li.innerHTML = `<span>🎯 ${t.price}원 ${t.notified ? "(완료)" : ""}</span> <button class="del-btn" onclick="removeTarget(${i})">삭제</button>`;
-                list.appendChild(li);
-            });
-        }
-
-        function saveData() {
-            localStorage.setItem('myTargets', JSON.stringify(targets));
-        }
-
-        function requestNoti() {
-            Notification.requestPermission().then(perm => {
-                if(perm === 'granted') alert("실시간 알림 준비 완료!");
-            });
-        }
-        
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('sw.js');
-        }
-    </script>
-</body>
-</html>
+        let targets = JSON.parse(localStorage
